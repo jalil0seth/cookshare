@@ -30,8 +30,10 @@ export const GeneratedContentView: React.FC<GeneratedContentProps> = ({
         <div className="bg-gray-50 rounded-lg p-6 mb-6 border border-gray-200">
           <h4 className="text-lg font-semibold text-gray-900 mb-4">SEO Metadata</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {metaItems.map((line, index) => {
-              const [label, value] = line.split(':').map(s => s.trim());
+            {metaItems.map((item, index) => {
+              if (!item.includes(':')) return null;
+              const [label, ...valueParts] = item.split(':');
+              const value = valueParts.join(':').trim();
               return (
                 <div key={index} className="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
                   <div className="text-sm font-medium text-gray-500 mb-1">{label}</div>
@@ -65,13 +67,26 @@ export const GeneratedContentView: React.FC<GeneratedContentProps> = ({
   };
 
   const renderContent = () => {
+    if (content.type === 'seo') {
+      const contentMatch = content.text.match(/\[CONTENT STRUCTURE[\s\S]*?]([\s\S]*)/);
+      if (contentMatch) {
+        return (
+          <div className="prose max-w-none">
+            <ReactMarkdown>{contentMatch[1].trim()}</ReactMarkdown>
+          </div>
+        );
+      }
+    }
+    
     if (content.type === 'article') {
+      const articleContent = content.text.replace(/\*\*/g, '__');
       return (
         <div className="prose max-w-none">
-          <div className="article-content" dangerouslySetInnerHTML={{ __html: content.text }} />
+          <ReactMarkdown>{articleContent}</ReactMarkdown>
         </div>
       );
     }
+    
     return (
       <div className="prose max-w-none">
         <ReactMarkdown>{content.text}</ReactMarkdown>
