@@ -1,98 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { ChefHat, History, Trash2, Key, Image, FileText, ListChecks, Settings, Copy, Check, Facebook, Share2, Loader } from 'lucide-react';
+import { Loader } from 'lucide-react';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-
-interface GeneratedContent {
-  id: string;
-  type: 'recipe' | 'image' | 'seo' | 'article';
-  name: string;
-  text: string;
-  imageUrl?: string;
-  imagePrompt?: string;
-  seoKeywords?: string[];
-  timestamp: number;
-  progress?: number;
-}
-
-interface GenerationProgress {
-  [key: string]: number;
-}
-
-const GENERATION_TYPES = {
-  recipe: {
-    label: 'Facebook Recipe Post',
-    Icon: Facebook,
-    color: 'blue',
-    defaultPrompt: `Create a recipe post in this format:
-Recipe Name
-Description
-Ingredients
-Instructions (numbered)
-Tips and Notes
-
-Make it for:`
-  },
-  pinterest: {
-    label: 'Pinterest Recipe',
-    Icon: Share2,
-    color: 'red',
-    defaultPrompt: `Create a Pinterest-optimized recipe with:
-- Catchy title
-- Brief description
-- Key ingredients
-- Quick instructions
-- Relevant hashtags
-
-Recipe for:`
-  },
-  image: {
-    label: 'Midjourney Prompt',
-    Icon: Image,
-    color: 'purple',
-    defaultPrompt: `Create a detailed Midjourney prompt only, no additional text.
-Include:
-- Subject description
-- Style/mood
-- Lighting
-- Camera angle
-- Technical specs
-
-For:`
-  },
-  seo: {
-    label: 'WordPress SEO',
-    Icon: ListChecks,
-    color: 'green',
-    defaultPrompt: `Create WordPress SEO elements:
-- Meta title (60 chars max)
-- Meta description (160 chars max)
-- Focus keywords (5-7)
-- Secondary keywords (8-10)
-- SEO title
-- Slug
-
-For:`
-  },
-  article: {
-    label: 'Blog Article',
-    Icon: FileText,
-    color: 'indigo',
-    defaultPrompt: `Write a complete blog post with:
-- SEO-optimized title
-- Introduction
-- Main sections
-- Conclusion
-- Meta description
-- Keywords
-
-Topic:`
-  }
-};
+import { GeneratedContent, GenerationProgress, GroupedContent } from './types';
+import { GENERATION_TYPES } from './constants';
+import { Header } from './components/Header';
+import { Settings } from './components/Settings';
+import { ContentTypeSelector } from './components/ContentTypeSelector';
+import { ContentHistory } from './components/ContentHistory';
 
 function App() {
   const [apiKey, setApiKey] = useState('');
   const [keywords, setKeywords] = useState('');
-  const [generationType, setGenerationType] = useState<keyof typeof GENERATION_TYPES>('recipe');
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set(['recipe']));
   const [customPrompt, setCustomPrompt] = useState('');
   const [language, setLanguage] = useState('English');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -102,6 +21,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [progress, setProgress] = useState<GenerationProgress>({});
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const savedApiKey = localStorage.getItem('geminiApiKey');
@@ -113,7 +33,8 @@ function App() {
 
   const handleCopy = async (text: string, id: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      const plainText = text.replace(/[#*`-]/g, '').trim();
+      await navigator.clipboard.writeText(plainText);
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch (err) {
@@ -121,24 +42,40 @@ function App() {
     }
   };
 
-  const generateContent = async (keyword: string) => {
+  const toggleContentType = (type: string) => {
+    const newTypes = new Set(selectedTypes);
+    if (newTypes.has(type)) {
+      newTypes.delete(type);
+    } else {
+      newTypes.add(type);
+    }
+    if (newTypes.size === 0) {
+      newTypes.add('recipe');
+    }
+    setSelectedTypes(newTypes);
+  };
+
+  const generateContent = async (keyword: string, type: string) => {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-    const prompt = customPrompt || GENERATION_TYPES[generationType].defaultPrompt;
-    const fullPrompt = `${prompt} ${keyword}\n\nGenerate in ${language} language.`;
+    const prompt = customPrompt || (
+      typeof GENERATION_TYPES[type].defaultPrompt === 'function'
+        ? GENERATION_TYPES[type].defaultPrompt(language, keyword)
+        : GENERATION_TYPES[type].defaultPrompt + ' ' + keyword
+    );
+    
+    const fullPrompt = type !== 'recipe' ? `${prompt}\n\nGenerate in ${language} language.` : prompt;
 
-    // Update progress
     setProgress(prev => ({
       ...prev,
-      [keyword]: 0
+      [`${keyword}-${type}`]: 0
     }));
 
-    // Simulate progress updates
     const progressInterval = setInterval(() => {
       setProgress(prev => ({
         ...prev,
-        [keyword]: Math.min((prev[keyword] || 0) + 10, 90)
+        [`${keyword}-${type}`]: Math.min((prev[`${keyword}-${type}`] || 0) + 10, 90)
       }));
     }, 500);
 
@@ -149,12 +86,12 @@ function App() {
       clearInterval(progressInterval);
       setProgress(prev => ({
         ...prev,
-        [keyword]: 100
+        [`${keyword}-${type}`]: 100
       }));
 
       return {
-        id: Date.now().toString(),
-        type: generationType,
+        id: `${Date.now()}-${type}`,
+        type,
         name: keyword.trim(),
         text,
         timestamp: Date.now(),
@@ -164,7 +101,7 @@ function App() {
       clearInterval(progressInterval);
       setProgress(prev => ({
         ...prev,
-        [keyword]: -1
+        [`${keyword}-${type}`]: -1
       }));
       throw error;
     }
@@ -185,15 +122,23 @@ function App() {
 
     try {
       const keywordList = keywords.split('\n').filter(k => k.trim());
+      const newContent: GeneratedContent[] = [];
       
       for (const keyword of keywordList) {
-        const content = await generateContent(keyword);
-        setHistory(prev => [content, ...prev]);
+        for (const type of selectedTypes) {
+          const content = await generateContent(keyword, type);
+          newContent.push(content);
+        }
       }
       
+      setHistory(prev => [...newContent, ...prev]);
       setLoading(false);
       setKeywords('');
-      localStorage.setItem('generationHistory', JSON.stringify(history));
+      localStorage.setItem('generationHistory', JSON.stringify([...newContent, ...history]));
+      
+      const newGroups = new Set(expandedGroups);
+      keywordList.forEach(keyword => newGroups.add(keyword));
+      setExpandedGroups(newGroups);
     } catch (err) {
       setError('Failed to generate content. Please check your API key and try again.');
       setLoading(false);
@@ -205,211 +150,54 @@ function App() {
     localStorage.removeItem('generationHistory');
   };
 
-  const renderProgress = (keyword: string) => {
-    const currentProgress = progress[keyword];
-    if (!currentProgress) return null;
-
-    return (
-      <div className="w-full bg-gray-200 rounded-full h-2 mb-4">
-        <div 
-          className={`h-2 rounded-full transition-all duration-500 ${
-            currentProgress === -1 
-              ? 'bg-red-500' 
-              : currentProgress === 100 
-                ? 'bg-green-500'
-                : 'bg-blue-500'
-          }`}
-          style={{ width: `${currentProgress === -1 ? 100 : currentProgress}%` }}
-        />
-      </div>
-    );
+  const toggleGroup = (keyword: string) => {
+    const newExpanded = new Set(expandedGroups);
+    if (newExpanded.has(keyword)) {
+      newExpanded.delete(keyword);
+    } else {
+      newExpanded.add(keyword);
+    }
+    setExpandedGroups(newExpanded);
   };
 
-  const renderContent = (content: GeneratedContent) => {
-    const TypeIcon = GENERATION_TYPES[content.type].Icon;
-    const typeColor = GENERATION_TYPES[content.type].color;
-
-    return (
-      <div key={content.id} className="bg-white rounded-lg shadow-lg overflow-hidden">
-        <div className={`bg-${typeColor}-50 p-4 border-b border-${typeColor}-100`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <TypeIcon className={`w-6 h-6 text-${typeColor}-600`} />
-              <div>
-                <h3 className="font-semibold text-gray-900">{content.name}</h3>
-                <p className="text-sm text-gray-500">
-                  {new Date(content.timestamp).toLocaleString()}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => handleCopy(content.text, content.id)}
-              className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-            >
-              {copiedId === content.id ? (
-                <Check className="w-5 h-5 text-green-500" />
-              ) : (
-                <Copy className="w-5 h-5 text-gray-500" />
-              )}
-            </button>
-          </div>
-        </div>
-
-        <div className="p-4">
-          {renderProgress(content.name)}
-          
-          <div className="prose max-w-none">
-            <pre className="whitespace-pre-wrap font-sans text-gray-800">{content.text}</pre>
-          </div>
-
-          {content.imagePrompt && (
-            <div className="mt-4 p-3 bg-purple-50 rounded-lg border border-purple-100">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium text-purple-900">Midjourney Prompt</h4>
-                <button
-                  onClick={() => handleCopy(content.imagePrompt!, content.id + '-prompt')}
-                  className="p-1 hover:bg-purple-100 rounded-full transition-colors"
-                >
-                  {copiedId === content.id + '-prompt' ? (
-                    <Check className="w-4 h-4 text-green-500" />
-                  ) : (
-                    <Copy className="w-4 h-4 text-purple-600" />
-                  )}
-                </button>
-              </div>
-              <p className="text-purple-800 font-mono text-sm">{content.imagePrompt}</p>
-            </div>
-          )}
-
-          {content.seoKeywords && (
-            <div className="mt-4">
-              <h4 className="font-medium text-gray-900 mb-2">Focus Keywords</h4>
-              <div className="flex flex-wrap gap-2">
-                {content.seoKeywords.map((keyword, index) => (
-                  <span
-                    key={index}
-                    className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm"
-                  >
-                    {keyword}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
+  const groupContentByKeyword = (content: GeneratedContent[]): GroupedContent => {
+    return content.reduce((groups: GroupedContent, item) => {
+      if (!groups[item.name]) {
+        groups[item.name] = [];
+      }
+      groups[item.name].push(item);
+      return groups;
+    }, {});
   };
+
+  const groupedContent = groupContentByKeyword(history);
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <ChefHat className="w-8 h-8 text-emerald-600" />
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">Content Generator</h1>
-              <p className="text-sm text-gray-500">Generate optimized content for multiple platforms</p>
-            </div>
-          </div>
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100"
-          >
-            <Settings className="w-5 h-5" />
-          </button>
-        </div>
-      </header>
+      <Header onToggleSettings={() => setShowSettings(!showSettings)} />
 
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="bg-white rounded-lg shadow-lg p-6 mb-8">
           {showSettings && (
-            <div className="mb-6 border-b pb-6">
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Google Gemini API Key
-                  <a
-                    href="https://makersuite.google.com/app/apikey"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-2 text-emerald-600 hover:text-emerald-500 text-sm"
-                  >
-                    Get your API key here →
-                  </a>
-                </label>
-                <div className="relative">
-                  <input
-                    type={showApiKey ? 'text' : 'password'}
-                    value={apiKey}
-                    onChange={(e) => {
-                      setApiKey(e.target.value);
-                      localStorage.setItem('geminiApiKey', e.target.value);
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
-                    placeholder="Enter your API key"
-                  />
-                  <button
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    className="absolute right-2 top-2.5 text-gray-500 hover:text-gray-700"
-                  >
-                    <Key className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Custom Prompt Template (Optional)
-                </label>
-                <textarea
-                  value={customPrompt}
-                  onChange={(e) => setCustomPrompt(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
-                  placeholder="Enter your custom prompt template or leave empty to use default"
-                  rows={4}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Output Language
-                </label>
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
-                >
-                  <option value="English">English</option>
-                  <option value="Spanish">Spanish</option>
-                  <option value="French">French</option>
-                  <option value="German">German</option>
-                  <option value="Italian">Italian</option>
-                </select>
-              </div>
-            </div>
+            <Settings
+              apiKey={apiKey}
+              showApiKey={showApiKey}
+              customPrompt={customPrompt}
+              language={language}
+              onApiKeyChange={(value) => {
+                setApiKey(value);
+                localStorage.setItem('geminiApiKey', value);
+              }}
+              onToggleShowApiKey={() => setShowApiKey(!showApiKey)}
+              onCustomPromptChange={setCustomPrompt}
+              onLanguageChange={setLanguage}
+            />
           )}
 
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Content Type
-            </label>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              {Object.entries(GENERATION_TYPES).map(([type, { label, Icon, color }]) => (
-                <button
-                  key={type}
-                  onClick={() => setGenerationType(type as keyof typeof GENERATION_TYPES)}
-                  className={`flex flex-col items-center justify-center p-4 rounded-lg border-2 transition-colors
-                    ${generationType === type 
-                      ? `border-${color}-500 bg-${color}-50 text-${color}-700` 
-                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                    }`}
-                >
-                  <Icon className={`w-6 h-6 mb-2 text-${color}-600`} />
-                  <span className="text-sm font-medium text-center">{label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <ContentTypeSelector
+            selectedTypes={selectedTypes}
+            onToggleType={toggleContentType}
+          />
 
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -441,33 +229,21 @@ function App() {
                 <span>Generating...</span>
               </>
             ) : (
-              <>
-                <span>Generate {GENERATION_TYPES[generationType].label}</span>
-              </>
+              <span>Generate Content</span>
             )}
           </button>
         </div>
 
-        {history.length > 0 && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-2">
-                <History className="w-5 h-5 text-gray-500" />
-                <h2 className="text-lg font-medium text-gray-900">Generated Content</h2>
-              </div>
-              <button
-                onClick={clearHistory}
-                className="flex items-center space-x-1 text-gray-500 hover:text-gray-700"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>Clear History</span>
-              </button>
-            </div>
-
-            <div className="grid gap-6">
-              {history.map((content) => renderContent(content))}
-            </div>
-          </div>
+        {Object.keys(groupedContent).length > 0 && (
+          <ContentHistory
+            groupedContent={groupedContent}
+            expandedGroups={expandedGroups}
+            progress={progress}
+            copiedId={copiedId}
+            onCopy={handleCopy}
+            onClearHistory={clearHistory}
+            onToggleGroup={toggleGroup}
+          />
         )}
       </main>
     </div>
