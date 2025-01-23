@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChefHat, History, Trash2, Key, Image, FileText, ListChecks, Settings, Copy, Check } from 'lucide-react';
+import { ChefHat, History, Trash2, Key, Image, FileText, ListChecks, Settings, Copy, Check, Facebook, Share2, Loader } from 'lucide-react';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 interface GeneratedContent {
@@ -11,14 +11,19 @@ interface GeneratedContent {
   imagePrompt?: string;
   seoKeywords?: string[];
   timestamp: number;
+  progress?: number;
+}
+
+interface GenerationProgress {
+  [key: string]: number;
 }
 
 const GENERATION_TYPES = {
   recipe: {
-    label: 'Recipe',
-    Icon: ChefHat,
-    defaultPrompt: `Create a detailed recipe in the following format:
-
+    label: 'Facebook Recipe Post',
+    Icon: Facebook,
+    color: 'blue',
+    defaultPrompt: `Create a recipe post in this format:
 Recipe Name
 Description
 Ingredients
@@ -27,43 +32,58 @@ Tips and Notes
 
 Make it for:`
   },
+  pinterest: {
+    label: 'Pinterest Recipe',
+    Icon: Share2,
+    color: 'red',
+    defaultPrompt: `Create a Pinterest-optimized recipe with:
+- Catchy title
+- Brief description
+- Key ingredients
+- Quick instructions
+- Relevant hashtags
+
+Recipe for:`
+  },
   image: {
     label: 'Midjourney Prompt',
     Icon: Image,
-    defaultPrompt: `Create a detailed Midjourney prompt in this format:
-
-Main Subject Description
-Style and Artistic Direction
-Lighting and Atmosphere
-Camera Angle and Composition
-Technical Parameters (resolution, quality)
+    color: 'purple',
+    defaultPrompt: `Create a detailed Midjourney prompt only, no additional text.
+Include:
+- Subject description
+- Style/mood
+- Lighting
+- Camera angle
+- Technical specs
 
 For:`
   },
   seo: {
-    label: 'SEO Content',
+    label: 'WordPress SEO',
     Icon: ListChecks,
-    defaultPrompt: `Create SEO-optimized content in this format:
-
-Meta Title (60 chars max)
-Meta Description (160 chars max)
-Primary Keywords (5-7)
-Secondary Keywords (8-10)
-Content Outline
-Short Introduction (2-3 sentences)
+    color: 'green',
+    defaultPrompt: `Create WordPress SEO elements:
+- Meta title (60 chars max)
+- Meta description (160 chars max)
+- Focus keywords (5-7)
+- Secondary keywords (8-10)
+- SEO title
+- Slug
 
 For:`
   },
   article: {
     label: 'Blog Article',
     Icon: FileText,
-    defaultPrompt: `Write a comprehensive blog article in this format:
-
-Title
-Introduction
-Main Content with subheadings
-Key Takeaways
-Conclusion
+    color: 'indigo',
+    defaultPrompt: `Write a complete blog post with:
+- SEO-optimized title
+- Introduction
+- Main sections
+- Conclusion
+- Meta description
+- Keywords
 
 Topic:`
   }
@@ -81,6 +101,7 @@ function App() {
   const [error, setError] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<GenerationProgress>({});
 
   useEffect(() => {
     const savedApiKey = localStorage.getItem('geminiApiKey');
@@ -89,18 +110,6 @@ function App() {
     const savedHistory = localStorage.getItem('generationHistory');
     if (savedHistory) setHistory(JSON.parse(savedHistory));
   }, []);
-
-  const saveToHistory = (content: GeneratedContent) => {
-    const newHistory = [content, ...history].slice(0, 10);
-    setHistory(newHistory);
-    localStorage.setItem('generationHistory', JSON.stringify(newHistory));
-  };
-
-  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const key = e.target.value;
-    setApiKey(key);
-    localStorage.setItem('geminiApiKey', key);
-  };
 
   const handleCopy = async (text: string, id: string) => {
     try {
@@ -119,32 +128,46 @@ function App() {
     const prompt = customPrompt || GENERATION_TYPES[generationType].defaultPrompt;
     const fullPrompt = `${prompt} ${keyword}\n\nGenerate in ${language} language.`;
 
-    const result = await model.generateContent(fullPrompt);
-    const text = result.response.text();
+    // Update progress
+    setProgress(prev => ({
+      ...prev,
+      [keyword]: 0
+    }));
 
-    let content: GeneratedContent = {
-      id: Date.now().toString(),
-      type: generationType,
-      name: keyword.trim(),
-      text: text,
-      timestamp: Date.now()
-    };
+    // Simulate progress updates
+    const progressInterval = setInterval(() => {
+      setProgress(prev => ({
+        ...prev,
+        [keyword]: Math.min((prev[keyword] || 0) + 10, 90)
+      }));
+    }, 500);
 
-    if (generationType === 'image') {
-      content.imagePrompt = text;
-    } else if (generationType === 'seo') {
-      const keywordMatch = text.match(/Primary Keywords[:\n]+([\s\S]*?)(?=\n\n|\n[A-Z]|$)/i);
-      if (keywordMatch) {
-        content.seoKeywords = keywordMatch[1]
-          .split(/[,\n]/)
-          .map(k => k.trim())
-          .filter(k => k.length > 0);
-      }
-    } else if (generationType === 'recipe') {
-      content.imageUrl = 'https://images.unsplash.com/photo-1556761175-b413da4baf72';
+    try {
+      const result = await model.generateContent(fullPrompt);
+      const text = result.response.text();
+
+      clearInterval(progressInterval);
+      setProgress(prev => ({
+        ...prev,
+        [keyword]: 100
+      }));
+
+      return {
+        id: Date.now().toString(),
+        type: generationType,
+        name: keyword.trim(),
+        text,
+        timestamp: Date.now(),
+        progress: 100
+      };
+    } catch (error) {
+      clearInterval(progressInterval);
+      setProgress(prev => ({
+        ...prev,
+        [keyword]: -1
+      }));
+      throw error;
     }
-
-    return content;
   };
 
   const handleGenerate = async () => {
@@ -165,11 +188,12 @@ function App() {
       
       for (const keyword of keywordList) {
         const content = await generateContent(keyword);
-        saveToHistory(content);
+        setHistory(prev => [content, ...prev]);
       }
       
       setLoading(false);
       setKeywords('');
+      localStorage.setItem('generationHistory', JSON.stringify(history));
     } catch (err) {
       setError('Failed to generate content. Please check your API key and try again.');
       setLoading(false);
@@ -181,13 +205,112 @@ function App() {
     localStorage.removeItem('generationHistory');
   };
 
+  const renderProgress = (keyword: string) => {
+    const currentProgress = progress[keyword];
+    if (!currentProgress) return null;
+
+    return (
+      <div className="w-full bg-gray-200 rounded-full h-2 mb-4">
+        <div 
+          className={`h-2 rounded-full transition-all duration-500 ${
+            currentProgress === -1 
+              ? 'bg-red-500' 
+              : currentProgress === 100 
+                ? 'bg-green-500'
+                : 'bg-blue-500'
+          }`}
+          style={{ width: `${currentProgress === -1 ? 100 : currentProgress}%` }}
+        />
+      </div>
+    );
+  };
+
+  const renderContent = (content: GeneratedContent) => {
+    const TypeIcon = GENERATION_TYPES[content.type].Icon;
+    const typeColor = GENERATION_TYPES[content.type].color;
+
+    return (
+      <div key={content.id} className="bg-white rounded-lg shadow-lg overflow-hidden">
+        <div className={`bg-${typeColor}-50 p-4 border-b border-${typeColor}-100`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <TypeIcon className={`w-6 h-6 text-${typeColor}-600`} />
+              <div>
+                <h3 className="font-semibold text-gray-900">{content.name}</h3>
+                <p className="text-sm text-gray-500">
+                  {new Date(content.timestamp).toLocaleString()}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => handleCopy(content.text, content.id)}
+              className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            >
+              {copiedId === content.id ? (
+                <Check className="w-5 h-5 text-green-500" />
+              ) : (
+                <Copy className="w-5 h-5 text-gray-500" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4">
+          {renderProgress(content.name)}
+          
+          <div className="prose max-w-none">
+            <pre className="whitespace-pre-wrap font-sans text-gray-800">{content.text}</pre>
+          </div>
+
+          {content.imagePrompt && (
+            <div className="mt-4 p-3 bg-purple-50 rounded-lg border border-purple-100">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-medium text-purple-900">Midjourney Prompt</h4>
+                <button
+                  onClick={() => handleCopy(content.imagePrompt!, content.id + '-prompt')}
+                  className="p-1 hover:bg-purple-100 rounded-full transition-colors"
+                >
+                  {copiedId === content.id + '-prompt' ? (
+                    <Check className="w-4 h-4 text-green-500" />
+                  ) : (
+                    <Copy className="w-4 h-4 text-purple-600" />
+                  )}
+                </button>
+              </div>
+              <p className="text-purple-800 font-mono text-sm">{content.imagePrompt}</p>
+            </div>
+          )}
+
+          {content.seoKeywords && (
+            <div className="mt-4">
+              <h4 className="font-medium text-gray-900 mb-2">Focus Keywords</h4>
+              <div className="flex flex-wrap gap-2">
+                {content.seoKeywords.map((keyword, index) => (
+                  <span
+                    key={index}
+                    className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm"
+                  >
+                    {keyword}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center">
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
             <ChefHat className="w-8 h-8 text-emerald-600" />
-            <h1 className="ml-2 text-xl font-semibold text-gray-900">Content Generator</h1>
+            <div>
+              <h1 className="text-xl font-semibold text-gray-900">Content Generator</h1>
+              <p className="text-sm text-gray-500">Generate optimized content for multiple platforms</p>
+            </div>
           </div>
           <button
             onClick={() => setShowSettings(!showSettings)}
@@ -198,17 +321,19 @@ function App() {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+      <main className="max-w-5xl mx-auto px-4 py-8">
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-8">
           {showSettings && (
             <div className="mb-6 border-b pb-6">
               <div className="mb-6">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Google Gemini API Key
-                  <a href="https://makersuite.google.com/app/apikey" 
-                     target="_blank" 
-                     rel="noopener noreferrer"
-                     className="ml-2 text-emerald-600 hover:text-emerald-500 text-sm">
+                  <a
+                    href="https://makersuite.google.com/app/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-2 text-emerald-600 hover:text-emerald-500 text-sm"
+                  >
                     Get your API key here →
                   </a>
                 </label>
@@ -216,7 +341,10 @@ function App() {
                   <input
                     type={showApiKey ? 'text' : 'password'}
                     value={apiKey}
-                    onChange={handleApiKeyChange}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      localStorage.setItem('geminiApiKey', e.target.value);
+                    }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
                     placeholder="Enter your API key"
                   />
@@ -237,14 +365,14 @@ function App() {
                   value={customPrompt}
                   onChange={(e) => setCustomPrompt(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
-                  placeholder={`Enter your custom prompt template (leave empty to use default)\nDefault: ${GENERATION_TYPES[generationType].defaultPrompt}`}
+                  placeholder="Enter your custom prompt template or leave empty to use default"
                   rows={4}
                 />
               </div>
 
-              <div className="mb-6">
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Select Language
+                  Output Language
                 </label>
                 <select
                   value={language}
@@ -263,21 +391,21 @@ function App() {
 
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Generation Type
+              Content Type
             </label>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {Object.entries(GENERATION_TYPES).map(([type, { label, Icon }]) => (
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              {Object.entries(GENERATION_TYPES).map(([type, { label, Icon, color }]) => (
                 <button
                   key={type}
                   onClick={() => setGenerationType(type as keyof typeof GENERATION_TYPES)}
                   className={`flex flex-col items-center justify-center p-4 rounded-lg border-2 transition-colors
                     ${generationType === type 
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700' 
-                      : 'border-gray-200 hover:border-emerald-200 hover:bg-gray-50'
+                      ? `border-${color}-500 bg-${color}-50 text-${color}-700` 
+                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                     }`}
                 >
-                  <Icon className="w-6 h-6 mb-2" />
-                  <span className="text-sm font-medium">{label}</span>
+                  <Icon className={`w-6 h-6 mb-2 text-${color}-600`} />
+                  <span className="text-sm font-medium text-center">{label}</span>
                 </button>
               ))}
             </div>
@@ -305,106 +433,39 @@ function App() {
           <button
             onClick={handleGenerate}
             disabled={loading}
-            className="w-full bg-emerald-600 text-white py-2 px-4 rounded-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:opacity-50"
+            className="w-full bg-emerald-600 text-white py-3 px-4 rounded-md hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:opacity-50 flex items-center justify-center space-x-2"
           >
-            {loading ? 'Generating...' : `Generate ${GENERATION_TYPES[generationType].label}`}
+            {loading ? (
+              <>
+                <Loader className="w-5 h-5 animate-spin" />
+                <span>Generating...</span>
+              </>
+            ) : (
+              <>
+                <span>Generate {GENERATION_TYPES[generationType].label}</span>
+              </>
+            )}
           </button>
         </div>
 
         {history.length > 0 && (
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center">
+          <div className="space-y-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-2">
                 <History className="w-5 h-5 text-gray-500" />
-                <h2 className="ml-2 text-lg font-medium text-gray-900">Generation History</h2>
+                <h2 className="text-lg font-medium text-gray-900">Generated Content</h2>
               </div>
               <button
                 onClick={clearHistory}
-                className="flex items-center text-gray-500 hover:text-gray-700"
+                className="flex items-center space-x-1 text-gray-500 hover:text-gray-700"
               >
-                <Trash2 className="w-4 h-4 mr-1" />
-                Clear History
+                <Trash2 className="w-4 h-4" />
+                <span>Clear History</span>
               </button>
             </div>
-            
-            <div className="space-y-4">
-              {history.map((content) => {
-                const TypeIcon = GENERATION_TYPES[content.type].Icon;
-                return (
-                  <div key={content.id} className="border rounded-lg p-4">
-                    <div className="flex items-start">
-                      {content.imageUrl && (
-                        <img
-                          src={content.imageUrl}
-                          alt={content.name}
-                          className="w-24 h-24 object-cover rounded-md"
-                        />
-                      )}
-                      <div className={content.imageUrl ? "ml-4 flex-1" : "flex-1"}>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center">
-                            <TypeIcon className="w-4 h-4 mr-2 text-gray-500" />
-                            <h3 className="font-medium text-gray-900">{content.name}</h3>
-                          </div>
-                          <button
-                            onClick={() => handleCopy(content.text, content.id)}
-                            className="p-1 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100"
-                            title="Copy content"
-                          >
-                            {copiedId === content.id ? (
-                              <Check className="w-4 h-4 text-green-500" />
-                            ) : (
-                              <Copy className="w-4 h-4" />
-                            )}
-                          </button>
-                        </div>
-                        <p className="text-sm text-gray-500 mb-2">
-                          {new Date(content.timestamp).toLocaleString()}
-                        </p>
-                        <div className="prose prose-sm max-w-none">
-                          <pre className="whitespace-pre-wrap text-gray-700 font-sans">{content.text}</pre>
-                        </div>
-                        
-                        {content.imagePrompt && (
-                          <div className="mt-2 p-2 bg-gray-50 rounded-md">
-                            <div className="flex items-center justify-between">
-                              <p className="text-sm font-medium text-gray-700">Midjourney Prompt:</p>
-                              <button
-                                onClick={() => handleCopy(content.imagePrompt!, content.id + '-prompt')}
-                                className="p-1 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100"
-                                title="Copy prompt"
-                              >
-                                {copiedId === content.id + '-prompt' ? (
-                                  <Check className="w-4 h-4 text-green-500" />
-                                ) : (
-                                  <Copy className="w-4 h-4" />
-                                )}
-                              </button>
-                            </div>
-                            <p className="text-sm text-gray-600">{content.imagePrompt}</p>
-                          </div>
-                        )}
-                        
-                        {content.seoKeywords && (
-                          <div className="mt-2">
-                            <p className="text-sm font-medium text-gray-700">SEO Keywords:</p>
-                            <div className="flex flex-wrap gap-2 mt-1">
-                              {content.seoKeywords.map((keyword, index) => (
-                                <span
-                                  key={index}
-                                  className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded-full"
-                                >
-                                  {keyword}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+
+            <div className="grid gap-6">
+              {history.map((content) => renderContent(content))}
             </div>
           </div>
         )}
